@@ -60,7 +60,8 @@ async def get_user(username: str = Depends(get_current_user_username),
                 'email': user.email,
                 'username': user.username,
                 'createdAt': user.created_at,
-                'id': user.id
+                'id': user.id,
+                'usertype': user.usertype
             }
         }
     except Exception as e:
@@ -82,7 +83,16 @@ async def signin_user(payload: SigninRequest,
     return {
         "status": status.HTTP_200_OK,
         "message": "Logged in",
-        'token': token
+        'token': token,
+        "data": {
+            'firstname': user.firstname,
+            'lastname': user.lastname,
+            'email': user.email,
+            'username': user.username,
+            'createdAt': user.created_at,
+            'id': user.id,
+            'usertype': user.usertype
+        }
     }
 
 

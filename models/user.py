@@ -1,11 +1,17 @@
 from datetime import datetime
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import String, DateTime, text
+from sqlalchemy import String, DateTime, text, Enum
 from typing import Optional
+from enum import Enum as PythonEnum
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class UserType(str, PythonEnum):
+    host = "host"
+    player = "player"
 
 
 class User(Base):
@@ -23,3 +29,7 @@ class User(Base):
                                           nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=text("CURRENT_TIMESTAMP"))
+    usertype: Mapped[UserType] = mapped_column(
+        Enum(UserType, name="usertype_enum"),
+        nullable=False,
+        server_default=UserType.player.value)
