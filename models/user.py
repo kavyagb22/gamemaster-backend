@@ -1,12 +1,13 @@
 from datetime import datetime
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import String, DateTime, text, Enum
-from typing import Optional
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Table, text
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from typing import Optional, List, TYPE_CHECKING
 from enum import Enum as PythonEnum
 
+from .base import Base
 
-class Base(DeclarativeBase):
-    pass
+if TYPE_CHECKING:
+    from .game import Game
 
 
 class UserType(str, PythonEnum):
@@ -33,3 +34,5 @@ class User(Base):
         Enum(UserType, name="usertype_enum"),
         nullable=False,
         server_default=UserType.player.value)
+    owned_games: Mapped[List["Game"]] = relationship("Game",
+                                                     back_populates="owner")

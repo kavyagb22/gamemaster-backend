@@ -3,7 +3,8 @@ from database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from models.user import User
-from models.request import SigninRequest, SignupRequest
+from models.game import Game
+from models.request import SigninRequest, SignupRequest, AddGameRequest, DeleteGameRequest, UpdateGameRequest
 from helpers.security import hash_password, verify_password, get_current_user_username, create_access_token
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -124,3 +125,122 @@ async def signup_user(payload: SignupRequest,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get('/games/get')
+async def get_games(username: str = Depends(get_current_user_username),
+                    db: AsyncSession = Depends(get_db)):
+    try:
+        query = select(Game).where(Game.owner_username == username)
+        result = await db.execute(query)
+        games = result.scalars().all()
+        return {
+            "status": status.HTTP_200_OK,
+            "data": {
+                'owner': username,
+                'games': games
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post('/games/add')
+async def add_game(payload: AddGameRequest,
+                   db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            select(User).where(User.username == payload.owner))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No valid owner found for usernames provided.")
+        existing_game_query = await db.execute(
+            select(Game).where(Game.name.ilike(payload.name.strip()),
+                               Game.owner_username == user.username))
+        if existing_game_query.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=
+                f"A game named '{payload.name}' already exists in {payload.owner}'s library."
+            )
+
+        new_game = Game(name=payload.name,
+                        min_players=payload.min_players,
+                        max_players=payload.max_players,
+                        optimal_players=payload.optimal_players,
+                        last_played=payload.last_played,
+                        gametype=payload.gametype,
+                        personal_rating=payload.personal_rating,
+                        group_rating=payload.group_rating,
+                        comments=payload.comments,
+                        playtime=payload.playtime,
+                        complexity=payload.complexity,
+                        owner=user)
+        db.add(new_game)
+        await db.commit()
+        await db.refresh(new_game)
+        return {
+            "status": status.HTTP_201_CREATED,
+            "message": "Game added",
+            "data": new_game
+        }
+    except HTTPException:
+
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=str(e))
+
+
+@app.post('/games/delete')
+async def delete_game(game: DeleteGameRequest,
+                      db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(select(Game).where(Game.id == game.game_id))
+        game = result.scalar_one_or_none()
+        if not game:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="Game not found")
+        await db.delete(game)
+        await db.commit()
+        return {
+            "message": "Game deleted successfully",
+            'status': status.HTTP_200_OK
+        }
+
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=str(e))
+
+
+@app.put('/games/update')
+async def update_game(payload: UpdateGameRequest,
+                      db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            select(Game).where(Game.id == payload.game_id))
+        game = result.scalar_one_or_none()
+        if not game:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="Game not found")
+        update_data = payload.model_dump(exclude={"game_id"},
+                                         exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(game, key, value)
+
+        await db.commit()
+        await db.refresh(game)
+        return {
+            "status": status.HTTP_200_OK,
+            "message": "Game updated",
+            "data": game
+        }
+
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=str(e))
