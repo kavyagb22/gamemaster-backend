@@ -3,10 +3,11 @@ from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Tabl
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from typing import Optional, List, TYPE_CHECKING
 from enum import Enum as PythonEnum
-if TYPE_CHECKING:
-    from .user import User
 from sqlalchemy.dialects.postgresql import ARRAY
 from .base import Base
+
+if TYPE_CHECKING:
+    from .user import User
 
 
 class GameType(str, PythonEnum):

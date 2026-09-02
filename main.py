@@ -4,9 +4,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from models.user import User
 from models.game import Game
-from models.request import SigninRequest, SignupRequest, AddGameRequest, DeleteGameRequest, UpdateGameRequest
+from models.group import Group
+from models.request import SigninRequest, SignupRequest, AddGameRequest, DeleteGameRequest, UpdateGameRequest, CreateGroupRequest, ConvertUserRequest, UpdateGroupRequest, DeleteGroupRequest, JoinGroupRequest
 from helpers.security import hash_password, verify_password, get_current_user_username, create_access_token
-
+from sqlalchemy.orm import selectinload
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Gamemaster API")
@@ -179,6 +180,16 @@ async def add_game(payload: AddGameRequest,
                         complexity=payload.complexity,
                         owner=user)
         db.add(new_game)
+
+        # update library too in group
+        groups_query = await db.execute(
+            select(Group).where(Group.host == user.username).options(
+                selectinload(Group.library)))
+        hosted_groups = groups_query.scalars().all()
+
+        for group in hosted_groups:
+            group.library.append(new_game)
+
         await db.commit()
         await db.refresh(new_game)
         return {
@@ -240,6 +251,184 @@ async def update_game(payload: UpdateGameRequest,
             "data": game
         }
 
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=str(e))
+
+
+@app.post('/groups/create')
+async def create_group(payload: CreateGroupRequest,
+                       db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            select(User).where(User.username == payload.host))
+        host = result.scalar_one_or_none()
+        if not host:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No valid user found for username provided.")
+        existing_group_query = await db.execute(
+            select(Group).where(Group.invite_code == payload.invite_code))
+        if existing_group_query.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=
+                f"A group with the same invite code '{payload.invite_code}' already exists."
+            )
+        existing_library = await db.execute(
+            select(Game).where(Game.owner_username == host.username))
+        host_games = existing_library.scalars().all()
+        new_group = Group(name=payload.name,
+                          desc=payload.desc,
+                          invite_code=payload.invite_code,
+                          preferred_location=payload.preferred_location,
+                          schedule=payload.schedule,
+                          gametype=payload.gametype,
+                          last_played=payload.last_played,
+                          host=host.username,
+                          members=[host],
+                          library=host_games)
+        db.add(new_group)
+        await db.commit()
+        await db.refresh(new_group, attribute_names=['members', 'library'])
+        return {
+            "status": status.HTTP_201_CREATED,
+            "message": "Group created",
+            "data": new_group
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=str(e))
+
+
+@app.get('/groups/get')
+async def get_groups(username: str = Depends(get_current_user_username),
+                     db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            select(Group).where(
+                Group.members.any(User.username == username)).options(
+                    selectinload(Group.members), selectinload(Group.library)))
+        groups = result.scalars().all()
+        return {"status": status.HTTP_200_OK, "data": {'groups': groups}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put('/groups/update')
+async def update_group(payload: UpdateGroupRequest,
+                       db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            select(Group).where(Group.id == payload.group_id))
+        group = result.scalar_one_or_none()
+        if not group:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="Group not found")
+        update_data = payload.model_dump(exclude={"group_id"},
+                                         exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(group, key, value)
+
+        await db.commit()
+        await db.refresh(group)
+        return {
+            "status": status.HTTP_200_OK,
+            "message": "Group updated",
+            "data": group
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=str(e))
+
+
+@app.post('/groups/delete')
+async def delete_group(group: DeleteGroupRequest,
+                       db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            select(Group).where(Group.id == group.group_id))
+        group = result.scalar_one_or_none()
+        if not group:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="Group not found")
+        await db.delete(group)
+        await db.commit()
+        return {
+            "message": "Group deleted successfully",
+            'status': status.HTTP_200_OK
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=str(e))
+
+
+@app.post('/groups/join')
+async def join_group(payload: JoinGroupRequest,
+                     db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            select(User).where(User.username == payload.username))
+        member = result.scalar_one_or_none()
+        if not member:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No valid user found for username provided.")
+        group_result = await db.execute(
+            select(Group).options(selectinload(Group.members)).where(
+                Group.invite_code == payload.invite_code,
+                Group.name == payload.group_name))
+        group = group_result.scalar_one_or_none()
+        if not group:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No valid group found for the code and name provided")
+        if member in group.members:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You are already a member of this group.")
+        group.members.append(member)
+        await db.commit()
+        await db.refresh(group)
+        return {"status": status.HTTP_201_CREATED, "message": "Group joined!"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=str(e))
+
+
+@app.post('/user/convert-type')
+async def convert_usertype(payload: ConvertUserRequest,
+                           db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            select(User).where(User.username == payload.username))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No valid user found for username provided.")
+        if user.usertype == 'host':
+            user.usertype = 'player'
+        elif user.usertype == 'player':
+            user.usertype = 'host'
+        await db.commit()
+        await db.refresh(user)
+        return {
+            "status": status.HTTP_200_OK,
+            "message": "Usertype converted",
+            "data": user
+        }
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
