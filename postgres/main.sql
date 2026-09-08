@@ -60,3 +60,41 @@ CREATE TABLE IF NOT EXISTS group_games (
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (group_id, game_id)
 );
+
+
+CREATE TYPE recurrencetype_enum AS ENUM(
+    'daily', 'weekly', 'monthly'
+);
+
+CREATE TYPE statustype_enum AS ENUM(
+    'confirmed', 'cancelled'
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    id SERIAL PRIMARY KEY,
+    "name" VARCHAR(100) NOT NULL,
+    "desc" VARCHAR(1000),
+    "location" VARCHAR(1000),
+    recurring BOOLEAN DEFAULT FALSE,
+    recurrence_rule recurrencetype_enum,
+    "date" TIMESTAMP NOT NULL,
+    end_date TIMESTAMP,
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    start_time TIME,
+    end_time TIME,
+    "status" statustype_enum 
+);
+
+CREATE TYPE rspvstatus_enum AS ENUM (
+    'pending', 'confirmed', 'declined', 'maybe'
+);
+
+CREATE TABLE IF NOT EXISTS event_participants (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    "status" rspvstatus_enum NOT NULL DEFAULT 'pending',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT unique_user_event UNIQUE (user_id, event_id)
+);

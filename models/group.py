@@ -9,6 +9,7 @@ from datetime import datetime
 if TYPE_CHECKING:
     from .user import User
     from .game import Game
+    from .event import Event
 
 group_members = Table(
     "group_members", Base.metadata,

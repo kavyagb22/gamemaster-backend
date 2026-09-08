@@ -5,7 +5,8 @@ from sqlalchemy import select
 from models.user import User
 from models.game import Game
 from models.group import Group
-from models.request import SigninRequest, SignupRequest, AddGameRequest, DeleteGameRequest, UpdateGameRequest, CreateGroupRequest, ConvertUserRequest, UpdateGroupRequest, DeleteGroupRequest, JoinGroupRequest
+from models.event import Event, EventParticipant, RspvStatus
+from models.request import SigninRequest, SignupRequest, AddGameRequest, DeleteGameRequest, UpdateGameRequest, CreateGroupRequest, ConvertUserRequest, UpdateGroupRequest, DeleteGroupRequest, JoinGroupRequest, CreateEventRequest, UpdateRspvRequest
 from helpers.security import hash_password, verify_password, get_current_user_username, create_access_token
 from sqlalchemy.orm import selectinload
 from fastapi.middleware.cors import CORSMiddleware
@@ -319,6 +320,18 @@ async def get_groups(username: str = Depends(get_current_user_username),
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get('/groups/host')
+async def get_groups_by_host(username: str = Depends(get_current_user_username), db: AsyncSession=Depends(get_db)):
+    try:
+        result = await db.execute(
+            select(Group.id, Group.name).where(Group.host == username)
+        )
+        rows = result.all()
+        groups = [{"id": row.id, "name": row.name} for row in rows]
+        
+        return {"status": status.HTTP_200_OK, "data": {'groups': groups}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.put('/groups/update')
 async def update_group(payload: UpdateGroupRequest,
@@ -433,3 +446,159 @@ async def convert_usertype(payload: ConvertUserRequest,
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail=str(e))
+
+
+@app.post('/events/create')
+async def create_event(payload: CreateEventRequest, db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            select(Group)
+            .options(selectinload(Group.members))
+            .where(Group.id == payload.group_id)
+        )
+        group = result.scalar_one_or_none()
+        if not group:
+           raise HTTPException(
+                           status_code=status.HTTP_404_NOT_FOUND,
+                           detail="No valid group found.") 
+        new_event = Event(
+            name=payload.name,
+            desc=payload.desc,
+            location=payload.location,
+            recurring=payload.recurring,
+            recurrence_rule=payload.recurrence_rule,
+            date=payload.date,
+            end_date=payload.end_date,
+            group_id=group.id,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
+            status=payload.status
+        )
+        db.add(new_event)
+        await db.flush()  
+
+        for member in group.members:
+            participant = EventParticipant(
+                event_id=new_event.id,
+                user_id=member.id,
+                status=RspvStatus.pending
+            )
+            db.add(participant)
+        await db.commit()
+        await db.refresh(new_event)
+        return {
+                    "status": status.HTTP_201_CREATED,
+                    "message": "Event created with member invites",
+                    "data": {
+                        "id": new_event.id,
+                        "name": new_event.name,
+                        "desc":new_event.desc,
+                        "location":new_event.location,
+                        "recurring":new_event.recurring,
+                        "recurrence_rule":new_event.recurrence_rule,
+                        "group_id": new_event.group_id,
+                        "date": new_event.date ,
+                        "end_date":  new_event.end_date ,
+                        "start_time": new_event.start_time ,
+                        "end_time": new_event.end_time ,
+                        "status": new_event.status
+                    }
+                }
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail=str(e))
+
+
+@app.get('/events/get')
+async def get_events(username: str = Depends(get_current_user_username),
+                     db: AsyncSession = Depends(get_db)):
+    try:
+        user_res = await db.execute(select(User.id).where(User.username == username))
+        current_user_id = user_res.scalar_one_or_none()
+        
+        if not current_user_id:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        result = await db.execute(
+            select(Event)
+            .join(Group, Event.group_id == Group.id)
+            .where(Group.members.any(User.username == username))
+            .options(
+                selectinload(Event.group),
+                selectinload(Event.participants)
+            )
+        )
+        events = result.scalars().all()
+
+        event_info = []
+        for event in events:
+           
+            current_user_participant = next(
+                (p for p in event.participants if p.user_id == current_user_id),
+                None
+            )
+
+            event_info.append({
+                "id": event.id,
+                "name": event.name,
+                "desc": event.desc,
+                "location": event.location,
+                "recurring": event.recurring,
+                "recurrence_rule": event.recurrence_rule,
+                "date":  event.date ,
+                "end_date":  event.end_date ,
+                "start_time": event.start_time,
+                "end_time": event.end_time,
+                "status": event.status,
+                "group_id": event.group_id,
+                "group": event.group,
+                "user_rspv_status": current_user_participant.status if current_user_participant else "pending"
+            })
+
+        return {
+            "status": status.HTTP_200_OK,
+            "data": {'events': event_info}
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+@app.post("/events/update-rspv")
+async def update_rspv(payload: UpdateRspvRequest,
+                      db: AsyncSession = Depends(get_db)):
+    try:
+        result = await db.execute(
+            select(EventParticipant).where(
+                EventParticipant.event_id == payload.event_id,
+                EventParticipant.user_id == payload.user_id
+            )
+        )
+        participant = result.scalar_one_or_none()
+        if not participant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No valid participant found for the provided event and user."
+            )
+        participant.status = payload.status
+        await db.commit()
+        await db.refresh(participant)
+        return {
+            "status": status.HTTP_200_OK,
+            "message": "RSPV status updated",
+            "data": {
+                "event_id": participant.event_id,
+                "user_id": participant.user_id,
+                "status": participant.status
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=str(e))  

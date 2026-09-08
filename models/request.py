@@ -1,7 +1,8 @@
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List, TYPE_CHECKING
 from .game import GameType
-from datetime import datetime
+from datetime import datetime, time, date as DateType
+from .event import RecurrenceType, StatusType, RspvStatus
 
 if TYPE_CHECKING:
     from .user import User
@@ -88,3 +89,21 @@ class JoinGroupRequest(BaseModel):
 
 class ConvertUserRequest(BaseModel):
     username: str
+
+class CreateEventRequest(BaseModel):
+    name: str
+    location: str
+    date: DateType
+    start_time: time
+    end_time: time
+    group_id: int
+    desc: Optional[str] = None
+    recurring: Optional[bool] = False
+    recurrence_rule: Optional[RecurrenceType] = None  
+    end_date: Optional[DateType] = None
+    status: Optional[StatusType] = None
+
+class UpdateRspvRequest(BaseModel):
+    event_id: int
+    user_id: int
+    status: RspvStatus
