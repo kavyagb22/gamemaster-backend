@@ -408,6 +408,19 @@ async def join_group(payload: JoinGroupRequest,
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="You are already a member of this group.")
         group.members.append(member)
+        ## update events to include this new member as a participant with pending status
+        events_result = await db.execute(
+            select(Event.id).where(Event.group_id == group.id)
+        )
+        existing_event_ids = events_result.scalars().all()
+
+        for event_id in existing_event_ids:
+            participant = EventParticipant(
+                event_id=event_id,
+                user_id=member.id,
+                status=RspvStatus.pending
+            )
+            db.add(participant)
         await db.commit()
         await db.refresh(group)
         return {"status": status.HTTP_201_CREATED, "message": "Group joined!"}
@@ -580,11 +593,23 @@ async def update_rspv(payload: UpdateRspvRequest,
         )
         participant = result.scalar_one_or_none()
         if not participant:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No valid participant found for the provided event and user."
+            event_check = await db.execute(
+                select(Event.id).where(Event.id == payload.event_id)
             )
-        participant.status = payload.status
+            if not event_check.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Event not found."
+                )
+
+            participant = EventParticipant(
+                event_id=payload.event_id,
+                user_id=payload.user_id,
+                status=payload.status
+            )
+            db.add(participant)
+        else:
+            participant.status = payload.status
         await db.commit()
         await db.refresh(participant)
         return {
